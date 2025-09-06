@@ -10,7 +10,8 @@ import { Progress } from "@/components/ui/progress";
 import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { questions, getResultType, getRecommendations } from '@/lib/questions';
 import { saveQuizSession, getUserSession } from '@/lib/local-storage';
-import { sendCombinedNotification, addToMailchimp } from '@/lib/emailjs-service';
+import { sendQuizResults } from '@/lib/emailjs-service';
+import { addToMailchimp, getAuswandererTags, getAuswandererMergeFields } from '@/lib/mailchimp-service';
 import { useRouter } from 'next/navigation';
 import { toast } from "sonner";
 
@@ -44,14 +45,14 @@ export default function QuizClient() {
   const calculateResults = () => {
     let totalScore = 0;
     const categoryScores: Record<string, number[]> = {
-      unternehmer_mindset: [],
+      veraenderungsbereitschaft: [],
+      sicherheitsbeduerfnis: [],
+      anpassungsfaehigkeit: [],
       risikobereitschaft: [],
-      technische_affinitaet: [],
-      ai_bereitschaft: [],
+      growth_vs_komfort: [],
+      konformitaet_vs_rebell: [],
       finanzielle_situation: [],
-      work_life_balance: [],
-      lernbereitschaft: [],
-      netzwerk_marketing: []
+      wertekompass: []
     };
 
     // Calculate scores
@@ -86,34 +87,22 @@ export default function QuizClient() {
   };
 
   const handleSubmit = async () => {
-    console.log('🎯 Quiz submission started!');
-    
-    if (!userSession) {
-      console.error('❌ No user session found!');
-      return;
-    }
-
-    console.log('👤 User session:', { name: userSession.name, email: userSession.email });
+    if (!userSession) return;
 
     setIsSubmitting(true);
     
     try {
-      console.log('📊 Calculating results...');
       const results = calculateResults();
-      console.log('✅ Results calculated:', results);
       
       // Save to localStorage
-      console.log('💾 Saving to localStorage...');
       saveQuizSession({
         userId: userSession.userId,
         answers,
         ...results
       });
-      console.log('✅ Saved to localStorage');
 
-      // Submission Data für alle Services
-      console.log('📧 Preparing submission data...');
-      const submissionData = {
+      // Send email with results
+      const emailSuccess = await sendQuizResults({
         name: userSession.name,
         email: userSession.email,
         totalScore: results.totalScore,
@@ -122,51 +111,50 @@ export default function QuizClient() {
         categoryScores: results.categoryScores,
         recommendations: results.recommendations,
         timestamp: new Date().toLocaleDateString('de-DE') + ' ' + new Date().toLocaleTimeString('de-DE')
-      };
-      
-      let servicesCompleted = 0;
-      let totalServices = 2;
-      
-      // 1. KOMBINIERTE E-MAIL (Kunde + Admin in einem)
-      console.log('📧 Sending combined notification (customer + admin)...');
-      try {
-        const combinedSuccess = await sendCombinedNotification(submissionData);
-        if (combinedSuccess) {
-          servicesCompleted++;
-          console.log('✅ Combined email sent (customer + admin)');
+      });
+
+      // Mailchimp Integration (nur wenn E-Mail erfolgreich)
+      let mailchimpSuccess = false;
+      if (emailSuccess) {
+        console.log('📮 Adding to Mailchimp...');
+        try {
+          const tags = getAuswandererTags(results.resultType, results.totalScore, results.maxScore);
+          const mergeFields = getAuswandererMergeFields({
+            totalScore: results.totalScore,
+            maxScore: results.maxScore,
+            resultType: results.resultType,
+            categoryScores: results.categoryScores,
+            timestamp: new Date().toLocaleDateString('de-DE')
+          });
+
+          mailchimpSuccess = await addToMailchimp({
+            email: userSession.email,
+            name: userSession.name,
+            tags: tags,
+            mergeFields: mergeFields
+          });
+
+          console.log('📮 Mailchimp result:', mailchimpSuccess);
+        } catch (mailchimpError) {
+          console.error('❌ Mailchimp error:', mailchimpError);
+          mailchimpSuccess = false;
         }
-      } catch (error) {
-        console.error('❌ Combined email failed:', error);
-      }
-      
-      // 2. MAILCHIMP INTEGRATION 
-      console.log('📮 Adding to Mailchimp...');
-      try {
-        const mailchimpSuccess = await addToMailchimp(submissionData);
-        if (mailchimpSuccess) {
-          servicesCompleted++;
-          console.log('✅ Added to Mailchimp successfully');
-        }
-      } catch (error) {
-        console.error('❌ Mailchimp integration failed:', error);
-      }
-      
-      // Success Message
-      if (servicesCompleted === totalServices) {
-        toast.success('🎉 Alles erfolgreich! E-Mail versendet & zu Newsletter hinzugefügt!');
-      } else if (servicesCompleted >= 1) {
-        toast.success(`✅ ${servicesCompleted}/${totalServices} Services erfolgreich - Ergebnisse gespeichert!`);
-      } else {
-        toast.error('⚠️ E-Mail-Services nicht verfügbar, aber Ergebnisse gespeichert');
       }
 
-      console.log('🔄 Redirecting to results page...');
+      // Success Messages
+      if (emailSuccess && mailchimpSuccess) {
+        toast.success('🎉 Ergebnisse versendet & Newsletter abonniert!');
+      } else if (emailSuccess) {
+        toast.success('Ergebnisse erfolgreich versendet!');
+      } else {
+        toast.error('E-Mail-Versand fehlgeschlagen, aber Ergebnisse gespeichert');
+      }
+
       router.push('/results');
     } catch (error) {
-      console.error('❌ Error submitting quiz:', error);
+      console.error('Error submitting quiz:', error);
       toast.error('Fehler beim Speichern der Antworten');
     } finally {
-      console.log('🏁 Quiz submission completed');
       setIsSubmitting(false);
     }
   };

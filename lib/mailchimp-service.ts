@@ -42,6 +42,7 @@ export function getAuswandererTags(resultType: string, totalScore: number, maxSc
   
   const baseTags = [
     'Auswanderer Test',
+    'Auswanderer Test Unique',
     'Migration Interest',
     `Score: ${scorePercentage}%`,
     `Type: ${resultType}`
